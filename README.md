@@ -58,7 +58,7 @@ If you wish to develop on the DRS Engine locally:
 
 1.  **Clone the repository**
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/drs-react-engine.git](https://github.com/YOUR_USERNAME/drs-react-engine.git)
+    git clone [https://github.com/JuanGonzalez151/drs-react-engine.git](https://github.com/JuanGonzalez151/drs-react-engine.git)
     cd drs-react-engine
     ```
 
