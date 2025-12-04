@@ -1,3 +1,4 @@
+
 import React, { useCallback, useState } from 'react';
 
 interface FileUploadProps {
@@ -8,10 +9,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Prevent redundant state updates to avoid loops
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(true);
+    setIsDragging(prev => {
+        if (!prev) return true;
+        return prev;
+    });
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {

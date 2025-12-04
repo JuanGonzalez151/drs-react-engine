@@ -1,7 +1,8 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
-import { AIAnalysisResult, ChartConfig, DatasetStats, DataRow, DashboardElement } from '../types';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, ScatterChart, Scatter, Label } from 'recharts';
-import { getDeepInsight, modifyDashboardWithGemini } from '../services/geminiService';
+import { AIAnalysisResult, ChartConfig, DatasetStats, DataRow, DashboardElement, RadioResponse } from '../types';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, ScatterChart, Scatter, Label, ComposedChart } from 'recharts';
+import { getDeepInsight, processRadioCommand } from '../services/geminiService';
 import { prepareVisualData, calculateMetric } from '../utils/dataUtils';
 
 interface DashboardProps {
@@ -13,18 +14,30 @@ interface DashboardProps {
 
 const COLORS = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#6366f1', '#8b5cf6', '#ec4899'];
 
+// Define Props and State for Error Boundary
+interface SafeChartProps {
+  children?: React.ReactNode;
+}
+
+interface SafeChartState {
+  hasError: boolean;
+}
+
 // 1. Error Boundary for Charts ("Mechanical Failure")
-class SafeChart extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
-  constructor(props: { children: React.ReactNode }) {
+class SafeChart extends React.Component<SafeChartProps, SafeChartState> {
+  constructor(props: SafeChartProps) {
     super(props);
     this.state = { hasError: false };
   }
-  static getDerivedStateFromError(error: any) {
+  
+  static getDerivedStateFromError(error: any): SafeChartState {
     return { hasError: true };
   }
+  
   componentDidCatch(error: any, errorInfo: any) {
     console.error("Chart Mechanical Failure:", error, errorInfo);
   }
+  
   render() {
     if (this.state.hasError) {
       return (
@@ -88,6 +101,12 @@ const SmartChart: React.FC<{ config: ChartConfig; data: DataRow[]; topic: string
 
   const renderKeys = config.dataKeys.length > 0 ? config.dataKeys : ['count'];
   const isScatter = config.type === 'scatter';
+  
+  // Memoize props objects to prevent re-renders
+  const margin = useMemo(() => ({ top: 10, right: 30, bottom: 30, left: 20 }), []);
+  const scatterDomain = useMemo(() => (['auto', 'auto']), []);
+  const scatterCursor = useMemo(() => ({ strokeDasharray: '3 3' }), []);
+  const barCursor = useMemo(() => ({ fill: 'rgba(239, 68, 68, 0.1)' }), []);
 
   return (
     <div className="flex flex-col h-full">
@@ -117,13 +136,13 @@ const SmartChart: React.FC<{ config: ChartConfig; data: DataRow[]; topic: string
                 <Legend wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace' }} />
               </PieChart>
             ) : (
-              <ChartComponent data={processedData} margin={{ top: 10, right: 30, bottom: 30, left: 20 }}>
+              <ChartComponent data={processedData} margin={margin}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} opacity={0.3} />
                 
                 <XAxis 
                   dataKey={config.xAxisKey} 
                   type={isScatter ? "number" : "category"}
-                  domain={isScatter ? ['auto', 'auto'] : undefined}
+                  domain={isScatter ? scatterDomain : undefined}
                   stroke="#64748b" 
                   fontSize={10} 
                   tickLine={false} 
@@ -156,7 +175,7 @@ const SmartChart: React.FC<{ config: ChartConfig; data: DataRow[]; topic: string
 
                 <Tooltip 
                   content={<CustomTooltip />} 
-                  cursor={isScatter ? { strokeDasharray: '3 3' } : { fill: 'rgba(239, 68, 68, 0.1)' }} 
+                  cursor={isScatter ? scatterCursor : barCursor} 
                 />
                 <Legend wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace', paddingTop: '10px' }} />
                 
@@ -188,6 +207,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
   const [radioStatus, setRadioStatus] = useState('');
   const [isContextExpanded, setIsContextExpanded] = useState(true);
 
+  // Radio Response State
+  const [radioResponse, setRadioResponse] = useState<RadioResponse | null>(null);
+
+  // Advanced Modeling Insights State
+  const [regInsight, setRegInsight] = useState<string | null>(null);
+  const [isRegLoading, setIsRegLoading] = useState(false);
+  const [mcInsight, setMcInsight] = useState<string | null>(null);
+  const [isMcLoading, setIsMcLoading] = useState(false);
+
   const [completedActions, setCompletedActions] = useState<Set<number>>(new Set());
   const toggleAction = (i: number) => {
     const s = new Set(completedActions);
@@ -195,7 +223,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
     setCompletedActions(s);
   };
 
-  // Init Layout
+  // Init Layout - Run only when analysis ID changes (assuming analysis object is stable from App)
   useEffect(() => {
     if (analysis.suggestedCharts) {
       const initial: DashboardElement[] = analysis.suggestedCharts.map(chart => ({
@@ -212,6 +240,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
     e.preventDefault();
     if (!radioMessage.trim()) return;
     setIsTransmitting(true);
+    setRadioResponse(null); // Clear previous response
     
     try {
       setRadioStatus("Receiving transmission...");
@@ -220,13 +249,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
       setRadioStatus("Consulting Construct...");
       const cols = stats.columnProfiles.map(c => c.name).join(', ');
       
-      const newLayout = await modifyDashboardWithGemini(drsLayout, radioMessage, cols);
+      const response = await processRadioCommand(drsLayout, radioMessage, cols, analysis.summary);
       
-      setRadioStatus("Updating Dashboard State...");
+      setRadioStatus("Processing Response...");
       await new Promise(r => setTimeout(r, 500)); // UX
 
-      setDrsLayout(newLayout);
+      // Update State
+      setRadioResponse(response);
+      if (response.updatedLayout) {
+        setDrsLayout(response.updatedLayout);
+      }
       setRadioMessage('');
+
     } catch (err) {
       console.error(err);
       setRadioStatus("Transmission Failed.");
@@ -235,6 +269,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
       setTimeout(() => setRadioStatus(''), 2000);
     }
   };
+
+  const handleRegInsight = async () => {
+    if (!stats.advancedStats?.regression) return;
+    setIsRegLoading(true);
+    const r = stats.advancedStats.regression;
+    try {
+        const context = `Linear Model: ${r.equation}. Strength (R2): ${r.rSquared.toFixed(3)}. Trend: ${r.slope > 0 ? 'Positive' : 'Negative'}.`;
+        const result = await getDeepInsight(`Regression: ${r.xColumn} vs ${r.yColumn}`, context, analysis.topic, analysis.summary);
+        setRegInsight(result);
+    } catch (e) { console.error(e); }
+    finally { setIsRegLoading(false); }
+  };
+
+  const handleMcInsight = async () => {
+    if (!stats.advancedStats?.monteCarlo) return;
+    setIsMcLoading(true);
+    const m = stats.advancedStats.monteCarlo;
+    try {
+        const context = `Simulation for ${m.column}. Pessimistic (P10): ${m.p10.toFixed(2)}, Expected (P50): ${m.p50.toFixed(2)}, Optimistic (P90): ${m.p90.toFixed(2)}.`;
+        const result = await getDeepInsight(`Monte Carlo Risk Analysis`, context, analysis.topic, analysis.summary);
+        setMcInsight(result);
+    } catch (e) { console.error(e); }
+    finally { setIsMcLoading(false); }
+  };
+
+  const hasAdvancedStats = !!stats.advancedStats;
+  const reg = stats.advancedStats?.regression;
+  const mc = stats.advancedStats?.monteCarlo;
+
+  // Memoize Composed Chart config
+  const composedMargin = useMemo(() => ({ top: 10, right: 30, bottom: 20, left: 10 }), []);
+  const composedDomain = useMemo(() => (['auto', 'auto']), []);
+  const composedCursor = useMemo(() => ({ strokeDasharray: '3 3' }), []);
 
   return (
     <div className="space-y-8 pb-32">
@@ -289,7 +356,113 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
         </div>
       </div>
 
-      {/* 2. RACE STRATEGY (BI Lap) */}
+      {/* 2. ADVANCED TELEMETRY MODELING (New Section) */}
+      {hasAdvancedStats && (reg || mc) && (
+        <div className="border border-slate-800 bg-slate-900/30 p-6 relative overflow-hidden group">
+           <div className="absolute top-0 right-0 p-2 opacity-50">
+              <span className="text-[10px] font-mono text-emerald-500 border border-emerald-900 bg-emerald-900/20 px-2 py-1 uppercase tracking-wider">Predictive Modeling Active</span>
+           </div>
+           
+           <h2 className="text-lg font-bold text-white uppercase tracking-wide flex items-center gap-2 mb-6">
+             <span className="text-emerald-500">⚡</span>
+             Advanced Telemetry Modeling
+           </h2>
+
+           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Regression Module */}
+              {reg && (
+                 <div>
+                    <div className="flex justify-between items-start mb-4">
+                        <h3 className="text-xs font-bold text-slate-400 font-mono uppercase border-l-2 border-emerald-500 pl-2">
+                            Linear Correlation: {reg.xColumn} vs {reg.yColumn}
+                        </h3>
+                        <button
+                            onClick={handleRegInsight}
+                            disabled={isRegLoading}
+                            className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider bg-slate-800 text-slate-300 hover:bg-slate-700 px-3 py-1 rounded-sm border border-slate-700 transition-colors"
+                        >
+                            {isRegLoading ? 'CALCULATING...' : 'TACTICAL ANALYSIS'}
+                        </button>
+                    </div>
+                    <div className="h-[250px] bg-slate-900 border border-slate-800 p-2">
+                       <ResponsiveContainer width="100%" height="100%">
+                         <ComposedChart margin={composedMargin}>
+                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                           <XAxis dataKey="x" type="number" domain={composedDomain} stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                           <YAxis dataKey="y" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                           <Tooltip content={<CustomTooltip />} cursor={composedCursor} />
+                           <Scatter name="Data" data={data.map(r => ({ x: r[reg.xColumn], y: r[reg.yColumn] })).slice(0, 200)} fill="#10b981" fillOpacity={0.6} />
+                           <Line 
+                              type="monotone" 
+                              data={reg.trendline} 
+                              dataKey="y" 
+                              stroke="#ef4444" 
+                              strokeWidth={2} 
+                              dot={false} 
+                              activeDot={false} 
+                              isAnimationActive={false}
+                           />
+                         </ComposedChart>
+                       </ResponsiveContainer>
+                    </div>
+                    <div className="mt-2 flex justify-between text-[10px] font-mono text-slate-500">
+                       <span>EQ: {reg.equation}</span>
+                       <span className="text-emerald-400">R² Strength: {reg.rSquared.toFixed(3)}</span>
+                    </div>
+                    {regInsight && (
+                        <div className="mt-3 p-3 bg-slate-800/50 border-l-2 border-emerald-500 animate-fadeIn">
+                           <p className="text-xs font-mono text-emerald-100">{regInsight}</p>
+                        </div>
+                    )}
+                 </div>
+              )}
+
+              {/* Monte Carlo Module */}
+              {mc && (
+                 <div>
+                    <div className="flex justify-between items-start mb-4">
+                        <h3 className="text-xs font-bold text-slate-400 font-mono uppercase border-l-2 border-purple-500 pl-2">
+                            Monte Carlo Risk Analysis ({mc.iterations} Iterations)
+                        </h3>
+                        <button
+                            onClick={handleMcInsight}
+                            disabled={isMcLoading}
+                            className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider bg-slate-800 text-slate-300 hover:bg-slate-700 px-3 py-1 rounded-sm border border-slate-700 transition-colors"
+                        >
+                            {isMcLoading ? 'CALCULATING...' : 'TACTICAL ANALYSIS'}
+                        </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                       <div className="bg-slate-950 border border-slate-800 p-3 text-center">
+                          <p className="text-[10px] text-slate-500 uppercase">P10 (Pessimistic)</p>
+                          <p className="text-xl font-mono font-bold text-red-400 mt-1">{mc.p10.toFixed(1)}</p>
+                       </div>
+                       <div className="bg-slate-950 border border-slate-800 p-3 text-center">
+                          <p className="text-[10px] text-slate-500 uppercase">P50 (Expected)</p>
+                          <p className="text-xl font-mono font-bold text-yellow-400 mt-1">{mc.p50.toFixed(1)}</p>
+                       </div>
+                       <div className="bg-slate-950 border border-slate-800 p-3 text-center">
+                          <p className="text-[10px] text-slate-500 uppercase">P90 (Optimistic)</p>
+                          <p className="text-xl font-mono font-bold text-emerald-400 mt-1">{mc.p90.toFixed(1)}</p>
+                       </div>
+                    </div>
+                    <div className="p-3 bg-slate-900/50 border border-slate-800 text-xs text-slate-400 leading-relaxed font-mono">
+                       Simulated forecast for <span className="text-white">{mc.column}</span> based on historical variance (σ: {mc.std.toFixed(2)}). 
+                       There is a 90% probability values will exceed P10 and a 10% probability they will exceed P90.
+                    </div>
+                    {mcInsight && (
+                        <div className="mt-3 p-3 bg-slate-800/50 border-l-2 border-purple-500 animate-fadeIn">
+                           <p className="text-xs font-mono text-purple-100">{mcInsight}</p>
+                        </div>
+                    )}
+                 </div>
+              )}
+           </div>
+        </div>
+      )}
+
+      {/* 3. RACE STRATEGY (BI Lap) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Insights */}
         <div className="lg:col-span-2 space-y-4">
@@ -340,7 +513,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
         </div>
       </div>
 
-      {/* 3. DRS ENGINE (Dynamic Dashboard) */}
+      {/* 4. DRS ENGINE (Dynamic Dashboard) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {drsLayout.map((el, idx) => {
           const spanClass = el.w === 2 ? 'md:col-span-2' : 'md:col-span-1';
@@ -370,15 +543,57 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
         })}
       </div>
 
-      {/* 4. RADIO CHECK (Chat Interface) */}
+      {/* 5. RADIO CHECK (Chat Interface) */}
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-slate-950 border-t border-slate-800 p-4">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-4xl mx-auto space-y-3">
           
           {/* Radio Status Indicator */}
           {radioStatus && (
             <div className="absolute -top-10 left-4 flex items-center gap-2 bg-slate-900 border border-slate-700 text-red-400 px-3 py-1 text-[10px] font-mono uppercase font-bold tracking-wider rounded-t animate-pulse">
                <span>📡 STATUS:</span>
                <span>{radioStatus}</span>
+            </div>
+          )}
+
+          {/* AI Response Display (Chat & System Log) */}
+          {radioResponse && (
+            <div className="animate-slideUp bg-slate-900 border border-slate-700 rounded-sm overflow-hidden shadow-2xl mb-2">
+               {/* Header */}
+               <div className="flex items-center justify-between px-3 py-1 bg-slate-950 border-b border-slate-800">
+                  <span className="text-[10px] font-mono uppercase text-slate-500 font-bold">DRS Transmission Log</span>
+                  <button onClick={() => setRadioResponse(null)} className="text-slate-500 hover:text-white">
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+               </div>
+               
+               {/* Content */}
+               <div className="p-4 grid gap-4">
+                  {/* Chat Response */}
+                  <div className="flex gap-3">
+                     <div className="h-6 w-6 rounded bg-red-600 flex items-center justify-center text-white text-[10px] font-bold">AI</div>
+                     <p className="text-sm text-slate-300 font-mono leading-relaxed">{radioResponse.chatResponse}</p>
+                  </div>
+
+                  {/* System Action Log */}
+                  {radioResponse.systemLog && (
+                    <div className="bg-black/40 border border-slate-800 p-3 font-mono text-xs space-y-2 rounded">
+                      <div className="flex items-center gap-2 text-emerald-500 font-bold uppercase border-b border-slate-800 pb-2 mb-2">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        System Actions & Analysis Log
+                      </div>
+                      <div className="grid grid-cols-[100px_1fr] gap-2">
+                        <span className="text-slate-500">ACTION:</span>
+                        <span className="text-white">{radioResponse.systemLog.actionTaken}</span>
+                        
+                        <span className="text-slate-500">SCOPE:</span>
+                        <span className="text-white">{radioResponse.systemLog.scope}</span>
+                        
+                        <span className="text-slate-500">STATE:</span>
+                        <span className="text-emerald-400">{radioResponse.systemLog.newAnalysisState}</span>
+                      </div>
+                    </div>
+                  )}
+               </div>
             </div>
           )}
 
@@ -392,7 +607,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, stats, analysis, onR
                 type="text" 
                 value={radioMessage}
                 onChange={(e) => setRadioMessage(e.target.value)}
-                placeholder="Command: 'Add a lap time comparison', 'Remove the sector metric'..."
+                placeholder="Ask a question ('Why is cost high?') or Command ('Add revenue chart')..."
                 className="w-full bg-slate-900 border border-slate-700 text-white font-mono text-sm px-4 py-3 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none transition-all placeholder-slate-600"
                 disabled={isTransmitting}
               />

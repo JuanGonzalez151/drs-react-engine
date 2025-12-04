@@ -1,10 +1,12 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './components/Layout';
 import { FileUpload } from './components/FileUpload';
+import { MissionConfig } from './components/MissionConfig';
 import { Dashboard } from './components/Dashboard';
 import { parseCSV, profileDataset } from './utils/dataUtils';
 import { analyzeDatasetWithGemini } from './services/geminiService';
-import { AppState, DataRow, DatasetStats, AIAnalysisResult } from './types';
+import { AppState, DataRow, DatasetStats, AIAnalysisResult, MissionSettings } from './types';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.UPLOAD);
@@ -25,38 +27,49 @@ const App: React.FC = () => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [processingLogs]);
 
-  const handleFileUpload = async (csvContent: string) => {
-    setAppState(AppState.PROCESSING);
+  // Step 1: Handle File Drop -> Go to Config
+  const handleFileIngest = async (csvContent: string) => {
     setProcessingLogs([]);
-
-    // Step 1: Ingestion
-    addLog("> INITIALIZING DRS TELEMETRY...");
-    await new Promise(r => setTimeout(r, 800)); // UX delay
-    
-    addLog("> Reading dataset packet...");
     const parsedData = parseCSV(csvContent);
-    setData(parsedData);
-    await new Promise(r => setTimeout(r, 500));
+    
+    if (parsedData.length === 0) {
+        alert("Empty dataset.");
+        return;
+    }
 
-    // Step 2: Profiling
-    addLog("> Profiling columns and data types...");
+    setData(parsedData);
     const computedStats = profileDataset(parsedData);
     setStats(computedStats);
+    setAppState(AppState.CONFIG);
+  };
+
+  // Step 2: Config Confirmed -> Start Processing
+  const handleSystemStart = async (settings: MissionSettings) => {
+    if (!data || !stats) return;
+
+    setAppState(AppState.PROCESSING);
+
+    // Sequence Simulation
+    addLog("> INITIALIZING DRS TELEMETRY...");
+    await new Promise(r => setTimeout(r, 600)); 
     
+    addLog(`> Mission Profile Loaded: ${settings.forcePersona ? 'MANUAL OVERRIDE' : 'AUTO-DETECT'}`);
+    addLog(`> Grounding Systems: ${settings.enableGrounding ? 'ONLINE' : 'OFFLINE'}`);
+    await new Promise(r => setTimeout(r, 500));
+
     // Step 3: Context Agent
     addLog("> Context Agent: Scanning for identity...");
-    const sample = parsedData.slice(0, 20);
+    const sample = data.slice(0, 20);
     
-    // Actual API Call
-    // We simulate the split between Context and Strategy for UX, even though it's one sophisticated call
-    const aiResult = await analyzeDatasetWithGemini(computedStats, sample);
+    // API Call with Settings
+    const aiResult = await analyzeDatasetWithGemini(stats, sample, settings);
 
-    // Step 4: Strategy Agent (Simulated Processing of the response)
+    // Step 4: Strategy Agent
     addLog("> Context Lock Established.");
     await new Promise(r => setTimeout(r, 600));
     
     addLog("> Strategy Agent: Formulating pit stops...");
-    await new Promise(r => setTimeout(r, 800)); // Give user time to read
+    await new Promise(r => setTimeout(r, 800)); 
 
     setAnalysis(aiResult);
     
@@ -77,7 +90,15 @@ const App: React.FC = () => {
   return (
     <Layout>
       {appState === AppState.UPLOAD && (
-        <FileUpload onFileUpload={handleFileUpload} />
+        <FileUpload onFileUpload={handleFileIngest} />
+      )}
+
+      {appState === AppState.CONFIG && stats && (
+         <MissionConfig 
+            stats={stats}
+            onConfirm={handleSystemStart}
+            onCancel={handleReset}
+         />
       )}
 
       {appState === AppState.PROCESSING && (

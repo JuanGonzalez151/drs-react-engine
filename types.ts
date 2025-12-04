@@ -32,11 +32,38 @@ export interface ColumnProfile {
   exampleValues: string[];
 }
 
+// Advanced Analytics Types
+export interface RegressionResult {
+  xColumn: string;
+  yColumn: string;
+  slope: number;
+  intercept: number;
+  rSquared: number;
+  equation: string;
+  trendline: { x: number; y: number }[];
+}
+
+export interface MonteCarloResult {
+  column: string;
+  p10: number; // Pessimistic
+  p50: number; // Expected
+  p90: number; // Optimistic
+  iterations: number;
+  mean: number;
+  std: number;
+}
+
+export interface AdvancedStats {
+  regression?: RegressionResult;
+  monteCarlo?: MonteCarloResult;
+}
+
 export interface DatasetStats {
   rowCount: number;
   columnProfiles: ColumnProfile[];
   outliers: DataRow[];
   narrativeInsights: string[]; // specific string insights (e.g. correlations)
+  advancedStats?: AdvancedStats;
 }
 
 // Grounding Metadata
@@ -71,6 +98,15 @@ export interface DashboardElement {
   metricLabel?: string;
 }
 
+// Mission Configuration
+export interface MissionSettings {
+  enableGrounding: boolean;
+  deepScan: boolean;
+  predictiveModeling: boolean; 
+  forcePersona: string;
+  analysisGoal: string; // New Setting
+}
+
 // AI Analysis Results
 export interface AIAnalysisResult {
   datasetName: string; 
@@ -87,8 +123,22 @@ export interface AIAnalysisResult {
   recommendedActions: string[]; // Prescriptive Checklist
 }
 
+// Radio / System Response Types
+export interface SystemActionLog {
+  actionTaken: string;
+  scope: string;
+  newAnalysisState: string;
+}
+
+export interface RadioResponse {
+  chatResponse: string;
+  systemLog: SystemActionLog | null;
+  updatedLayout?: DashboardElement[]; // Optional, only if command modifies UI
+}
+
 export enum AppState {
   UPLOAD = 'UPLOAD',
+  CONFIG = 'CONFIG',
   PROCESSING = 'PROCESSING',
   DASHBOARD = 'DASHBOARD'
 }
